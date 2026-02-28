@@ -1,0 +1,8 @@
+__pycache__
+*.pyc
+.git
+.env
+.env.*
+README.md
+test_input.json
+docs/
