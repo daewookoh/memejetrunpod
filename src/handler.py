@@ -6,6 +6,7 @@ MemeJet RunPod Serverless Handler
 """
 
 import base64
+import hashlib
 import io
 import os
 import re
@@ -20,8 +21,6 @@ from PIL import Image
 from config import (
     VOLUME_PATH,
     FACEFUSION_DIR,
-    GIF_DIR,
-    FRAMES_DIR,
     MP4_DIR,
     FACEFUSION_ASSETS,
     VOLUME_ASSETS,
@@ -34,8 +33,6 @@ from config import (
 
 def setup():
     """디렉토리 초기화 + FaceFusion 모델 캐시 심링크."""
-    os.makedirs(GIF_DIR, exist_ok=True)
-    os.makedirs(FRAMES_DIR, exist_ok=True)
     os.makedirs(MP4_DIR, exist_ok=True)
     os.makedirs(VOLUME_ASSETS, exist_ok=True)
 
@@ -57,57 +54,48 @@ def setup():
 # 템플릿 준비
 # ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
 
-def prepare_template(tid: str) -> dict | None:
-    """GIF 다운로드 → 프레임 추출 → MP4 변환. 성공 시 info dict."""
-    gif_path = f"{GIF_DIR}/{tid}.gif"
-    frame_dir = f"{FRAMES_DIR}/{tid}"
-    mp4_path = f"{MP4_DIR}/{tid}.mp4"
+def prepare_template(tid: str, video_url: str) -> dict | None:
+    """MP4 다운로드 + 프레임 수 파악. 성공 시 info dict."""
+    # URL 해시로 캐시 키 생성 (URL 변경 시 재다운로드)
+    url_hash = hashlib.md5(video_url.encode()).hexdigest()[:8]
+    mp4_path = f"{MP4_DIR}/{tid}_{url_hash}.mp4"
 
-    url = f"https://media.giphy.com/media/{tid}/giphy.gif"
-
-    # 1) GIF 다운로드
-    if not os.path.exists(gif_path):
+    # 1) MP4 다운로드
+    if not os.path.exists(mp4_path):
         try:
-            r = requests.get(url, timeout=30)
+            r = requests.get(video_url, timeout=60)
             if r.status_code != 200:
-                print(f"[WARN] GIF download failed {tid}: HTTP {r.status_code}")
+                print(f"[WARN] MP4 download failed {tid}: HTTP {r.status_code}")
                 return None
-            with open(gif_path, "wb") as f:
+            with open(mp4_path, "wb") as f:
                 f.write(r.content)
-            print(f"[DL] {tid} downloaded")
+            print(f"[DL] {tid} downloaded from R2")
         except Exception as e:
-            print(f"[WARN] GIF download error {tid}: {e}")
+            print(f"[WARN] MP4 download error {tid}: {e}")
             return None
 
-    # 2) 프레임 추출
-    if not os.path.exists(frame_dir) or not os.listdir(frame_dir):
-        os.makedirs(frame_dir, exist_ok=True)
-        subprocess.run(
-            ["ffmpeg", "-i", gif_path, "-vsync", "0", f"{frame_dir}/%06d.png"],
-            capture_output=True,
-        )
-
-    frame_files = sorted(f for f in os.listdir(frame_dir) if f.endswith(".png"))
-    if not frame_files:
-        print(f"[WARN] {tid}: no frames extracted")
-        return None
-
-    # 3) MP4 변환
-    if not os.path.exists(mp4_path):
-        subprocess.run(
+    # 2) 프레임 수 파악 (ffprobe)
+    try:
+        result = subprocess.run(
             [
-                "ffmpeg", "-framerate", "10",
-                "-i", f"{frame_dir}/%06d.png",
-                "-c:v", "libx264", "-pix_fmt", "yuv420p", "-crf", "18",
-                "-vf", "scale=trunc(iw/2)*2:trunc(ih/2)*2",
+                "ffprobe", "-v", "error",
+                "-count_frames", "-select_streams", "v:0",
+                "-show_entries", "stream=nb_read_frames",
+                "-of", "csv=p=0",
                 mp4_path,
             ],
-            capture_output=True,
+            capture_output=True, text=True, timeout=30,
         )
-        print(f"[MP4] {tid}: converted")
+        frame_count = int(result.stdout.strip())
+    except Exception:
+        frame_count = 0
 
-    info = {"frame_count": len(frame_files), "mp4_path": mp4_path}
-    print(f"[OK] {tid}: {info['frame_count']} frames")
+    if frame_count == 0:
+        print(f"[WARN] {tid}: no frames detected")
+        return None
+
+    info = {"frame_count": frame_count, "mp4_path": mp4_path}
+    print(f"[OK] {tid}: {frame_count} frames")
     return info
 
 
@@ -131,7 +119,8 @@ def decode_base64_to_file(data: str, path: str):
 def handler(job):
     """
     Input:
-      - template_id: str  (Giphy media ID)
+      - template_id: str  (템플릿 ID)
+      - video_url: str    (R2 MP4 URL)
       - swap_image: str   (base64 face image)
     Output:
       - frames: list[str] (base64 PNG frames)
@@ -139,13 +128,14 @@ def handler(job):
     """
     job_input = job["input"]
     template_id = job_input.get("template_id")
+    video_url = job_input.get("video_url")
     swap_image = job_input.get("swap_image")
 
-    if not template_id or not swap_image:
-        return {"error": "template_id and swap_image are required"}
+    if not template_id or not swap_image or not video_url:
+        return {"error": "template_id, video_url, and swap_image are required"}
 
     # 템플릿 준비 (network volume 캐시)
-    info = prepare_template(template_id)
+    info = prepare_template(template_id, video_url)
     if info is None:
         return {"error": "template_not_found"}
 
