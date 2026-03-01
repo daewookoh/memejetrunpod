@@ -179,6 +179,7 @@ def handler(job):
         )
 
         # 로그 출력 + 진행률 전송
+        ff_logs = []
         progress_re = re.compile(r"processing:.*\|\s*(\d+)/(\d+)\s*\[")
         for raw_line in proc.stdout:
             # 타임아웃 체크
@@ -187,10 +188,11 @@ def handler(job):
                 print(f"[TIMEOUT] {elapsed:.1f}s exceeded {EXECUTION_TIMEOUT}s limit")
                 proc.kill()
                 proc.wait()
-                return {"error": "face_swap_failed"}
+                return {"error": "timeout", "detail": f"Exceeded {EXECUTION_TIMEOUT}s", "logs": ff_logs[-20:]}
 
             line = raw_line.decode("utf-8", errors="replace").strip()
             if line:
+                ff_logs.append(line)
                 m = progress_re.search(line)
                 if m:
                     done = int(m.group(1))
@@ -208,7 +210,7 @@ def handler(job):
 
         if proc.returncode != 0 or not os.path.exists(output_path):
             print(f"[FF-ERR] returncode={proc.returncode}")
-            return {"error": "face_swap_failed"}
+            return {"error": "face_swap_failed", "returncode": proc.returncode, "elapsed": round(elapsed, 1), "logs": ff_logs[-30:]}
 
         print(f"[SWAP] FaceFusion done: {template_id}")
         runpod.serverless.progress_update(job, {"step": "generating", "done": 0, "total": 0, "percent": 90})
