@@ -13,6 +13,7 @@ import re
 import shutil
 import subprocess
 import tempfile
+import time
 
 import requests
 import runpod
@@ -169,6 +170,9 @@ def handler(job):
         print(f"[SWAP] {template_id}: processing {total} frames")
         runpod.serverless.progress_update(job, {"step": "sending", "done": 0, "total": total, "percent": 0})
 
+        EXECUTION_TIMEOUT = 20  # 초 (cold start 제외, 실행 후 타임아웃)
+        start_time = time.time()
+
         proc = subprocess.Popen(
             cmd, stdout=subprocess.PIPE, stderr=subprocess.STDOUT,
             cwd=FACEFUSION_DIR,
@@ -177,6 +181,14 @@ def handler(job):
         # 로그 출력 + 진행률 전송
         progress_re = re.compile(r"processing:.*\|\s*(\d+)/(\d+)\s*\[")
         for raw_line in proc.stdout:
+            # 타임아웃 체크
+            elapsed = time.time() - start_time
+            if elapsed > EXECUTION_TIMEOUT:
+                print(f"[TIMEOUT] {elapsed:.1f}s exceeded {EXECUTION_TIMEOUT}s limit")
+                proc.kill()
+                proc.wait()
+                return {"error": "face_swap_failed"}
+
             line = raw_line.decode("utf-8", errors="replace").strip()
             if line:
                 m = progress_re.search(line)
@@ -190,6 +202,9 @@ def handler(job):
                     print(f"[FF] {line}")
 
         proc.wait()
+
+        elapsed = time.time() - start_time
+        print(f"[SWAP] FaceFusion finished in {elapsed:.1f}s")
 
         if proc.returncode != 0 or not os.path.exists(output_path):
             print(f"[FF-ERR] returncode={proc.returncode}")
