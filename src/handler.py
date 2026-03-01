@@ -177,20 +177,25 @@ def handler(job):
         ]
 
         print(f"[SWAP] {template_id}: processing {total} frames")
+        runpod.serverless.progress_update(job, {"step": "sending", "done": 0, "total": total, "percent": 0})
 
         proc = subprocess.Popen(
             cmd, stdout=subprocess.PIPE, stderr=subprocess.STDOUT,
             cwd=FACEFUSION_DIR,
         )
 
-        # 로그 출력
+        # 로그 출력 + 진행률 전송
         progress_re = re.compile(r"processing:.*\|\s*(\d+)/(\d+)\s*\[")
         for raw_line in proc.stdout:
             line = raw_line.decode("utf-8", errors="replace").strip()
             if line:
                 m = progress_re.search(line)
                 if m:
-                    print(f"[FF] progress {m.group(1)}/{m.group(2)}")
+                    done = int(m.group(1))
+                    frame_total = int(m.group(2))
+                    pct = int(done / frame_total * 100) if frame_total > 0 else 0
+                    print(f"[FF] progress {done}/{frame_total} ({pct}%)")
+                    runpod.serverless.progress_update(job, {"step": "composing", "done": done, "total": frame_total, "percent": pct})
                 else:
                     print(f"[FF] {line}")
 
@@ -201,6 +206,7 @@ def handler(job):
             return {"error": "face_swap_failed"}
 
         print(f"[SWAP] FaceFusion done: {template_id}")
+        runpod.serverless.progress_update(job, {"step": "generating", "done": 0, "total": 0, "percent": 90})
 
         # 출력 비디오 → 프레임 추출
         frames_out = f"{work_dir}/out_frames"
