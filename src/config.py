@@ -11,9 +11,6 @@ VOLUME_PATH = os.environ.get("VOLUME_PATH", "/runpod-volume")
 # FaceFusion 설치 경로
 FACEFUSION_DIR = os.environ.get("FACEFUSION_DIR", "/facefusion")
 
-# 데이터 디렉토리 (network volume 내)
-MP4_DIR = f"{VOLUME_PATH}/templates_mp4"
-
 # FaceFusion 모델 캐시 (network volume 에 저장 → cold start 방지)
 FACEFUSION_ASSETS = f"{FACEFUSION_DIR}/.assets"
 VOLUME_ASSETS = f"{VOLUME_PATH}/.assets"
