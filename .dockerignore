@@ -6,3 +6,6 @@ __pycache__
 README.md
 test_input.json
 docs/
+facefusion/
+venv/
+.claude/
